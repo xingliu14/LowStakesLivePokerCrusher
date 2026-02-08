@@ -46,12 +46,13 @@ const PREFLOP_RFI: Record<PositionCategory, Record<HandCategory, [number, number
 }
 
 // Vs raise strategy (calling or 3-betting a raise)
+// PERSONAL RULE #2: Early position - 3bet or fold only (no calling)
 const VS_RAISE: Record<PositionCategory, Record<HandCategory, [number, number, number]>> = {
   early: {
-    premium: [0, 20, 80],
-    strong: [10, 70, 20],
-    medium: [40, 50, 10],
-    speculative: [80, 15, 5],
+    premium: [0, 0, 100],      // Always 3-bet premium
+    strong: [20, 0, 80],        // Mostly 3-bet, sometimes fold
+    medium: [60, 0, 40],        // 3-bet or fold (no calling)
+    speculative: [85, 0, 15],   // Mostly fold, occasionally 3-bet as bluff
     weak: [100, 0, 0]
   },
   middle: {
@@ -87,34 +88,35 @@ const VS_3BET: Record<HandCategory, [number, number, number]> = {
 }
 
 // Vs limpers (from late position / blinds)
+// PERSONAL RULE #1: Never limp - always raise or fold
 const VS_LIMP: Record<PositionCategory, Record<HandCategory, [number, number, number]>> = {
   early: {
     premium: [0, 0, 100],
     strong: [0, 0, 100],
-    medium: [10, 20, 70],
-    speculative: [30, 40, 30],
-    weak: [80, 15, 5]
+    medium: [10, 0, 90],        // Raise or fold (no limping)
+    speculative: [50, 0, 50],   // Raise or fold (no limping)
+    weak: [85, 0, 15]           // Mostly fold, occasionally iso-raise
   },
   middle: {
     premium: [0, 0, 100],
     strong: [0, 0, 100],
-    medium: [0, 10, 90],
-    speculative: [15, 35, 50],
-    weak: [60, 25, 15]
+    medium: [0, 0, 100],        // Always raise
+    speculative: [30, 0, 70],   // Raise or fold (no limping)
+    weak: [70, 0, 30]           // Raise or fold (no limping)
   },
   late: {
     premium: [0, 0, 100],
     strong: [0, 0, 100],
-    medium: [0, 5, 95],
-    speculative: [5, 25, 70],
-    weak: [40, 30, 30]
+    medium: [0, 0, 100],        // Always raise
+    speculative: [20, 0, 80],   // Raise or fold (no limping)
+    weak: [50, 0, 50]           // Raise or fold (no limping)
   },
   blinds: {
     premium: [0, 0, 100],
     strong: [0, 0, 100],
-    medium: [0, 20, 80],
-    speculative: [10, 40, 50],
-    weak: [50, 35, 15]
+    medium: [0, 0, 100],        // Always raise
+    speculative: [30, 0, 70],   // Raise or fold (no limping)
+    weak: [60, 0, 40]           // Raise or fold (no limping)
   }
 }
 
@@ -201,10 +203,18 @@ export function getPreflopRecommendation(
   holeCards: [Card, Card],
   position: Position,
   situation: Situation,
-  stackDepth: number
+  stackDepth: number,
+  actions: PlayerAction[] = []
 ): Recommendation {
   const handCategory = categorizeHand(holeCards)
   const positionCategory = getPositionCategory(position)
+
+  // Count number of callers/limpers for raise sizing
+  const numCallers = actions.filter(a => a.action === 'call').length
+
+  // Get the last raise/bet amount for 3-bet sizing
+  const lastRaise = actions.filter(a => a.action === 'raise' || a.action === 'bet').pop()
+  const raiseAmount = lastRaise?.amount || 3 // Default to 3BB if not specified
 
   let strategy: [number, number, number]
 
@@ -222,13 +232,11 @@ export function getPreflopRecommendation(
       strategy = VS_3BET[handCategory]
       break
     case 'vs_4bet':
-      // Very tight vs 4-bet
+      // PERSONAL RULE #3: Never bluff vs 4-bet - only continue with premium hands
       if (handCategory === 'premium') {
-        strategy = [0, 30, 70]
-      } else if (handCategory === 'strong') {
-        strategy = [50, 40, 10]
+        strategy = [0, 0, 100]  // Always 5-bet/shove with premium only
       } else {
-        strategy = [100, 0, 0]
+        strategy = [100, 0, 0]  // Fold everything else (no calling, no bluffing)
       }
       break
     default:
@@ -250,7 +258,7 @@ export function getPreflopRecommendation(
     fold: Math.round(strategy[0] / total * 100),
     call: Math.round(strategy[1] / total * 100),
     raise: Math.round(strategy[2] / total * 100),
-    raiseSize: getRaiseSize(situation, stackDepth)
+    raiseSize: getRaiseSize(situation, stackDepth, positionCategory, numCallers, raiseAmount)
   }
 }
 
@@ -283,19 +291,41 @@ export function getPostflopRecommendation(
 }
 
 // Get suggested raise size
-function getRaiseSize(situation: Situation, stackDepth: number): number {
+// PERSONAL RULE #4: Larger 3-bets from early position to win pot preflop
+// PERSONAL RULE #5: Add 1BB per limper, or full bet amount per caller when 3-betting
+function getRaiseSize(
+  situation: Situation,
+  stackDepth: number,
+  positionCategory: PositionCategory,
+  numCallers: number = 0,
+  raiseAmount: number = 3
+): number {
+  let baseSize: number
+
   switch (situation) {
     case 'RFI':
-      return 3 // 3BB open
+      baseSize = 3 // 3BB open
+      break
     case 'vs_limp':
-      return 4 // 4BB iso-raise
+      // Base iso-raise + 1BB per limper
+      baseSize = 3 + numCallers
+      break
     case 'vs_raise':
-      return 9 // 3x 3-bet
+      // 3-bet sizing: multiply the original raise, then add callers
+      // Early position uses 4x, others use 3x
+      const multiplier = positionCategory === 'early' ? 4 : 3
+      baseSize = raiseAmount * multiplier
+      // Add the full raise amount for each caller (they put in raiseAmount each)
+      baseSize += numCallers * raiseAmount
+      break
     case 'vs_3bet':
-      return 22 // 2.5x 4-bet
+      baseSize = 22 // 2.5x 4-bet
+      break
     default:
-      return 3
+      baseSize = 3
   }
+
+  return baseSize
 }
 
 // Apply learned strategy adjustments
@@ -366,7 +396,8 @@ export function getRecommendation(
       holeCards,
       gameState.myPosition,
       situation,
-      gameState.effectiveStack
+      gameState.effectiveStack,
+      gameState.actions
     )
   } else {
     // For postflop, we need board texture
