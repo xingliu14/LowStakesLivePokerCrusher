@@ -77,6 +77,11 @@ Strategy matrices and AI extraction prompts are tuned for this context.
 - **Supabase:** Database schema exists but integration incomplete
 - Hand history tracking not yet implemented
 
+### PWA Infrastructure
+- **Service worker:** Cache-first for static assets, network-first for pages/API routes
+- **Offline caching:** Pre-caches app shell (`/`, `/learn`, `/settings`) for use at live tables with spotty connectivity
+- **No external PWA libraries:** Uses plain Service Worker API and Next.js Metadata API to keep the bundle lightweight
+
 ## Known Limitations
 
 1. Hand history tracking not implemented (schema exists)
@@ -94,3 +99,8 @@ Strategy matrices and AI extraction prompts are tuned for this context.
 - Stack depth and position are critical factors in all strategies
 - Types defined in `src/types/poker.ts` are the source of truth
 - Strategy matrices in `src/lib/poker/strategy.ts` drive all recommendations
+
+## Update
+
+- When ever there is a major update to the code, update the CLAUDE.md as well.
+- Only keep the information that cannot be inferred from the code.
